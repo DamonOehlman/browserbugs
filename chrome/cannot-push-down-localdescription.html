@@ -1,0 +1,141 @@
+<html>
+<body>
+<script src="http://webrtc.googlecode.com/svn/trunk/samples/js/base/adapter.js"></script>
+<script>
+var conns = [ {}, {} ].map(createConnection);
+var defaultConfig = {
+  mandatory: {
+    iceServers: []
+  }
+};
+
+function createConnection(constraints, index) {
+  return new RTCPeerConnection(defaultConfig, constraints);
+}
+
+function gatherCandidates(srcIdx, targetIdx) {
+  var queued = [];
+  var src = conns[srcIdx];
+  var dst = conns[targetIdx];
+
+  function applyCandidate(candidate) {
+    if (dst.signalingState != 'stable') {
+      return queued.push(candidate);
+    }
+
+    try {
+      trace('connection ' + targetIdx + ' adding ice candidate:');
+      console.log('      ', candidate);
+      dst.addIceCandidate(candidate);
+    }
+    catch (e) {
+      console.error('error applying candidate: ', e);
+    }
+  }
+
+  src.onicecandidate = function(evt) {
+    if (evt.candidate) {
+      trace('connection ' + srcIdx + ' discovered candidate: ');
+      console.log('      ', evt.candidate);
+      applyCandidate(evt.candidate);
+    }
+  }
+
+  dst.onsignalingstatechange = function() {
+    if (dst.signalingState == 'stable') {
+      queued.splice(0).forEach(applyCandidate);
+      dst.onsignalingstatechange = null;
+    }
+  };
+}
+
+function handshake(a, b, callback) {
+
+  function answer() {
+    b.createAnswer(
+      function(desc) {
+        b.setLocalDescription(
+          desc,
+          function() {
+            a.setRemoteDescription(
+              desc,
+              waitConnected,
+              callback
+            );
+          },
+          callback
+        );
+      },
+      callback
+    );
+  }
+
+  function offer() {
+    a.createOffer(
+      function(desc) {
+        a.setLocalDescription(
+          desc,
+          function() {
+            b.setRemoteDescription(
+              desc,
+              answer,
+              callback
+            );
+          },
+          callback
+        );
+      },
+
+      callback
+    );
+  }
+
+  function waitConnected() {
+    var connected = a.iceConnectionState == 'connected' && b.iceConnectionState == 'connected';
+
+    trace('debug: checking connection state, 0: ' +  a.iceConnectionState + ', 1: ' + b.iceConnectionState);
+
+    if (! connected) {
+      a.oniceconnectionstatechange = b.oniceconnectionstatechange = waitConnected;
+      return;
+    }
+
+    a.oniceconnectionstatechange = b.oniceconnectionstatechange = null;
+    callback();
+  }
+
+  offer();
+}
+
+// setup connections to exchange ice candidates
+gatherCandidates(0, 1);
+gatherCandidates(1, 0);
+
+// handshake the connections
+trace('handshaking between connection 0 and 1')
+handshake(conns[0], conns[1], function(err) {
+  if (err) {
+    return console.error('handshake failed: ', err);
+  }
+
+  trace('connectivity between 0 and 1 established');
+
+  trace('adding data channel to connection 0');
+  conns[0].createDataChannel('test');
+  conns[1].ondatachannel = function(evt) {
+    trace('connection 1 received data channel');
+  };
+
+  trace('renegotiating the connection');
+  handshake(conns[0], conns[1], function(err) {
+    if (err) {
+      return console.error('handshake failed: ', err);
+    }
+
+    trace('connection successfully renegotiated');
+  });
+});
+
+</script>
+</body>
+</html>
